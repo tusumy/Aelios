@@ -15,6 +15,7 @@ import { appendMemory, classifyTurn, hasServerState, inputItems, recentHumanText
 import { RequestContractError } from "./request";
 import { dispatchExchange, persistHumanUtterance, observeResponse, prepareExchange } from "./record";
 import { callGatewayUpstream, prepareGatewayRequest, UpstreamRouteError, type PreparedRequest } from "./upstream";
+import { wantsCodexOauth } from "./codexOauth";
 
 export function gatewayError(protocol: Protocol, message: string, status: number): Response {
   const type = status === 401 ? "authentication_error" : status >= 500 ? "api_error" : "invalid_request_error";
@@ -219,7 +220,7 @@ export async function handleGateway(request: Request, env: Env, ctx: ExecutionCo
   }
   // Only main models carry memory and feed Dream; every other model passes through quietly.
   const main = isMainModel(identity, body.model);
-  if (protocol === "responses" && main && hasServerState(body, protocol)) {
+  if (protocol === "responses" && main && hasServerState(body, protocol) && !wantsCodexOauth(env, protocol, body.model)) {
     return gatewayError(protocol, "Request-only memory requires stateless Responses input: send full history without previous_response_id, conversation or item_reference; or use a model outside the main list.", 400);
   }
   const turn = classifyTurn(body, protocol, request.headers.get("x-aelios-purpose") === "auxiliary");
@@ -271,7 +272,9 @@ export async function handleGateway(request: Request, env: Env, ctx: ExecutionCo
     headers.set("x-aelios-normalized", String(prepared.removed.length));
     headers.set("x-aelios-recall-id", recallId);
     headers.set("x-aelios-remember", rememberStatus);
-    headers.set("x-aelios-provider", upstream.headers.get("cf-aig-provider") || "");
+    headers.set("x-aelios-provider", upstream.headers.get("cf-aig-provider")
+      || (prepared.route.auth === "anthropic-oauth" ? "anthropic"
+        : prepared.route.auth === "chatgpt-oauth" ? "chatgpt" : ""));
     headers.set("x-aelios-model", upstream.headers.get("cf-aig-model") || body.model);
     headers.set("cache-control", "no-store");
     const response = new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
